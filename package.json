@@ -1,7 +1,7 @@
 {
   "name": "picalta-firebase",
-  "version": "1.0.0",
-  "description": "Picalta - rede social de fotos com conversas (Firebase)",
+  "version": "2.0.0",
+  "description": "Picalta - rede social de fotos com conversas, música YouTube e PicalAi (Firebase)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
