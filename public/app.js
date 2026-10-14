@@ -18,6 +18,9 @@ const state = {
   currentChatPeer: null,
   chatUnsubs: [],
   notifications: [],
+  myFavorites: [],
+  hashtagUnsubs: [],
+  player: { xp: 0, level: 1, achievements: [] },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -61,6 +64,8 @@ function toast(msg) {
   t.classList.add('show');
   clearTimeout(toast._timer);
   toast._timer = setTimeout(() => t.classList.remove('show'), 2400);
+  // beep sintetizado (Web Audio) se o som estiver ligado
+  try { if (typeof playBeep === 'function') playBeep(880, 100); } catch (e) {}
 }
 
 /* ---------- tema ---------- */
@@ -80,6 +85,13 @@ function toast(msg) {
 
 /* ---------- arranque ---------- */
 initFirebase().then(({ onAuthStateChanged }) => {
+  // recupera resultado de redirect (Google login) se existir
+  fbGetRedirectResult().then((r) => {
+    if (!r.ok && r.error) {
+      const status = $('#firebase-status');
+      if (status) status.textContent = r.error;
+    }
+  });
   onAuthStateChanged(auth, (user) => {
     if (user) {
       state.me = user;
@@ -92,7 +104,13 @@ initFirebase().then(({ onAuthStateChanged }) => {
           return;
         }
         state.profile = p;
-        enterApp();
+        // aplica nome/foto do Google só em campos em falta
+        fbApplyGoogleDefaults(user).then(() => {
+          fbLoadProfile(user.uid).then((fresh) => {
+            if (fresh) state.profile = fresh;
+            enterApp();
+          }).catch(() => enterApp());
+        }).catch(() => enterApp());
       }).catch((e) => {
         const status = $('#firebase-status');
         if (status) status.textContent = 'Erro ao carregar perfil: ' + (e.message || e);
@@ -117,8 +135,46 @@ function enterApp() {
   $('#login-view').style.display = 'none';
   $('#app-view').style.display = '';
   document.title = `Picalta — ${state.profile.name || state.me.email}`;
+  // conquista: coruja noturna (0h–5h)
+  const hr = new Date().getHours();
+  if (hr >= 0 && hr < 5) unlockAchievement('night_owl');
   startWatchers();
+  startProgressWatchers();
+  renderMusicView();
+  renderPolls();
+  renderSettings();
+  // aviso se Cloudinary não estiver configurado
+  if (!cloudinaryConfigured()) {
+    const status = $('#firebase-status');
+    console.warn('[Picalta] Cloudinary não configurado — uploads de imagens desativados. Ver public/config.example.js.');
+  }
 }
+
+/* ---------- login com Google ---------- */
+$('#google-login-btn').addEventListener('click', async () => {
+  const err = $('#auth-error');
+  err.textContent = '';
+  const btn = $('#google-login-btn');
+  btn.disabled = true;
+  try {
+    const r = await fbGoogleSignIn();
+    if (!r.ok) err.textContent = r.error || 'Não foi possível entrar com o Google.';
+    else if (r.user) {
+      // aplica nome/foto do Google ao perfil se necessário
+      await fbApplyGoogleDefaults(r.user);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
+$('#forgot-password-btn').addEventListener('click', async () => {
+  const email = $('#auth-email').value.trim();
+  if (!email) { $('#auth-error').textContent = 'Escreve o teu email primeiro.'; return; }
+  const r = await fbResetPassword(email);
+  $('#auth-error').textContent = r.ok
+    ? 'Email de recuperação enviado. Verifica a caixa de entrada.'
+    : (r.error || 'Não foi possível enviar o email.');
+});
 
 /* ---------- auth UI ---------- */
 let authMode = 'login'; // 'login' | 'signup'
@@ -185,6 +241,12 @@ function startWatchers() {
     renderPeopleBar();
   });
 
+  // favoritos
+  dbWatchFavorites(state.me.uid, (snap) => {
+    state.myFavorites = snap.docs.map((d) => d.data().postId);
+    renderFeed();
+  });
+
   // chats
   dbWatchChats(state.me.uid, async (snap) => {
     state.chats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -248,6 +310,8 @@ async function loadMissingUsers() {
 function addNotification(text, when) {
   state.notifications.unshift({ text, when });
   renderNotifications();
+  // conquista: primeiro seguidor
+  if (/começou a seguir-te/.test(text)) unlockAchievement('first_follow');
 }
 function renderNotifications() {
   const box = $('#notifications-list');
@@ -268,6 +332,10 @@ $('#tabbar-logout') && $('#tabbar-logout').addEventListener('click', () => $('#l
 
 /* ---------- navegação ---------- */
 function navigate(view) {
+  // se sairmos da vista dos jogos, limpa listeners/timers do jogo ativo
+  if (view !== 'games' && state.view === 'games') {
+    closeGame();
+  }
   state.view = view;
   $$('.view').forEach((v) => v.classList.remove('active'));
   $('#view-' + view).classList.add('active');
@@ -293,6 +361,10 @@ document.addEventListener('click', (e) => {
     if (v === 'profile') renderMyProfile();
     if (v === 'explore') renderSuggestions();
     if (v === 'search') $('#search-input') && $('#search-input').focus();
+    if (v === 'games') renderGamesHome();
+    if (v === 'music') renderMusicView();
+    if (v === 'polls') renderPolls();
+    if (v === 'settings') renderSettings();
     return;
   }
   const likeEl = e.target.closest('[data-like]');
@@ -305,7 +377,38 @@ document.addEventListener('click', (e) => {
   if (followEl) { e.preventDefault(); toggleFollow(followEl.dataset.followTarget, followEl); return; }
   const profEl = e.target.closest('[data-goto-profile]');
   if (profEl) { e.preventDefault(); renderProfile(profEl.dataset.gotoProfile); return; }
+  const favEl = e.target.closest('[data-fav]');
+  if (favEl) { e.preventDefault(); toggleFavorite(favEl.dataset.fav, favEl); return; }
+  const tagEl = e.target.closest('[data-hashtag]');
+  if (tagEl) { e.preventDefault(); showHashtag(tagEl.dataset.hashtag); return; }
+  const voteEl = e.target.closest('[data-vote-poll]');
+  if (voteEl) { e.preventDefault(); votePoll(voteEl.dataset.votePoll, parseInt(voteEl.dataset.votePollIdx)); return; }
 });
+
+/* ---------- favoritos ---------- */
+async function toggleFavorite(postId, btn) {
+  try {
+    const cur = state.myFavorites.includes(postId);
+    const nowFav = await dbToggleFavorite(state.me.uid, postId, cur);
+    const idx = state.myFavorites.indexOf(postId);
+    if (nowFav && idx < 0) state.myFavorites.push(postId);
+    if (!nowFav && idx >= 0) state.myFavorites.splice(idx, 1);
+    renderFeed();
+  } catch (e) { toast('Não foi possível guardar nos favoritos'); }
+}
+
+/* ---------- hashtag ---------- */
+async function showHashtag(tag) {
+  // mostra posts com essa hashtag no feed com filtro
+  state.feedTab = 'hashtag';
+  state.currentHashtag = tag;
+  navigate('feed');
+  renderFeed();
+  toast('A mostrar #' + tag);
+  // volta ao feed "Para ti" ao clicar na tab
+  const reset = () => { state.feedTab = 'all'; state.currentHashtag = null; renderFeed(); };
+  $('#tab-feed-all').addEventListener('click', reset, { once: true });
+}
 
 /* ---------- feed ---------- */
 function renderPeopleBar() {
@@ -340,6 +443,9 @@ function renderFeed() {
   if (state.feedTab === 'following') {
     posts = posts.filter((p) => state.myFollowing.includes(p.uid));
   }
+  if (state.feedTab === 'hashtag') {
+    posts = posts.filter((p) => (p.hashtags || []).includes('#' + state.currentHashtag));
+  }
   if (!posts.length) {
     box.innerHTML = `<div class="empty">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
@@ -351,6 +457,17 @@ function renderFeed() {
     const u = state.usersCache[p.uid] || { name: 'desconhecido', username: '?' };
     const liked = (p.likes || []).includes(state.me.uid);
     const isMine = p.uid === state.me.uid;
+    const isFav = state.myFavorites ? state.myFavorites.includes(p.id) : false;
+    const moodBadge = p.mood ? `<span class="mood-badge">${escapeHtml(p.mood)}</span>` : '';
+    const imageOrText = p.imageUrl
+      ? `<img class="post-image" src="${escapeHtml(p.imageUrl)}" alt="publicação" loading="lazy" crossorigin="anonymous" />`
+      : `<div class="post-text-content">${escapeHtml(p.text || '')} ${moodBadge}</div>`;
+    const caption = p.imageUrl
+      ? `<p class="post-caption"><b>${escapeHtml(u.username || '?')}</b> ${escapeHtml(p.caption || '')}</p>`
+      : '';
+    const hashtags = (p.hashtags || []).length
+      ? `<div class="post-hashtags">${p.hashtags.map((h) => `<a href="#" data-hashtag="${escapeHtml(h.slice(1))}">${escapeHtml(h)}</a>`).join(' ')}</div>`
+      : '';
     return `
     <article class="post" data-post-id="${escapeHtml(p.id)}">
       <div class="post-head">
@@ -359,11 +476,14 @@ function renderFeed() {
           <a href="#" data-goto-profile="${escapeHtml(p.uid)}">${escapeHtml(u.username || '?')}</a>
           <span>${timeAgo(p.createdAt)}</span>
         </div>
-        ${isMine ? `<button class="icon-btn delete-post" data-delete-post="${escapeHtml(p.id)}" aria-label="apagar" style="margin-left:auto">
+        <button class="icon-btn fav-btn ${isFav ? 'liked' : ''}" data-fav="${escapeHtml(p.id)}" aria-label="favorito" style="margin-left:auto;color:${isFav ? 'var(--color-primary)' : 'var(--color-text-faint)'}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${isFav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        </button>
+        ${isMine ? `<button class="icon-btn delete-post" data-delete-post="${escapeHtml(p.id)}" aria-label="apagar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
         </button>` : ''}
       </div>
-      <img class="post-image" src="${escapeHtml(p.imageUrl)}" alt="publicação" loading="lazy" crossorigin="anonymous" />
+      ${imageOrText}
       <div class="post-actions">
         <button class="icon-btn like-btn ${liked ? 'liked' : ''}" data-like="${escapeHtml(p.id)}" aria-label="gostar">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7.5-4.6-9.5-9C.9 8.6 2.6 5 6 5c2.2 0 3.6 1.2 4.5 2.5h3C14.4 6.2 15.8 5 18 5c3.4 0 5.1 3.6 3.5 7-2 4.4-9.5 9-9.5 9z" transform="translate(0 -1)"/></svg>
@@ -371,7 +491,8 @@ function renderFeed() {
         <span class="likes-count">${(p.likes || []).length} gostos</span>
       </div>
       <div class="post-meta">
-        <p class="post-caption"><b>${escapeHtml(u.username || '?')}</b> ${escapeHtml(p.caption || '')}</p>
+        ${caption}
+        ${hashtags}
         <div class="comments-list" data-comments="${escapeHtml(p.id)}">
           ${(state.commentsCache[p.id] || []).map((c) => {
             const cu = state.usersCache[c.uid] || { username: '?' };
@@ -440,10 +561,12 @@ $('#publish-post').addEventListener('click', async () => {
   btn.textContent = 'A enviar…';
   try {
     const url = await stUploadImage(state.me.uid, state.imageFile);
-    await dbCreatePost(state.me.uid, url, caption);
+    await dbCreatePhotoPost(state.me.uid, url, caption);
     $('#new-post-modal').style.display = 'none';
     $('#post-caption').value = '';
     toast('Publicado!');
+    xpOnPost();
+    unlockAchievement('first_post');
   } catch (e) {
     toast('Falha ao publicar: ' + (e.message || 'erro do Storage'));
   } finally {
@@ -477,6 +600,7 @@ document.addEventListener('submit', async (e) => {
   try {
     await dbAddComment(postId, state.me.uid, text);
     input.value = '';
+    xpOnComment();
   } catch (err) { toast('Falha ao comentar'); }
 });
 
@@ -499,10 +623,11 @@ $('#story-file').addEventListener('change', (e) => {
 $('#publish-story').addEventListener('click', async () => {
   if (!state.storyFile) { toast('Escolhe uma foto'); return; }
   try {
-    const url = await stUploadImage(state.me.uid, state.storyFile);
+    const url = await stUploadStoryImage(state.me.uid, state.storyFile);
     await dbAddStory(state.me.uid, url);
     $('#new-story-modal').style.display = 'none';
     toast('História publicada (24h)');
+    xpOnStory();
   } catch (e) { toast('Falha: ' + (e.message || 'erro')); }
 });
 function openStory(uid) {
@@ -526,6 +651,10 @@ async function doSearch(term) {
   const box = $('#search-results');
   if (!term) { box.innerHTML = ''; return; }
   const users = await dbSearchUsers(term);
+  // conquista: pesquisa por 3 pessoas diferentes
+  state._searchedUsers = state._searchedUsers || new Set();
+  for (const u of users) if (u.id !== state.me.uid) state._searchedUsers.add(u.id);
+  if (state._searchedUsers.size >= 3) unlockAchievement('explorer');
   if (!users.length) {
     box.innerHTML = '<div class="empty">Ninguém encontrado com esse nome.</div>';
     return;
@@ -596,12 +725,26 @@ async function renderProfile(uid) {
       <button class="btn small ghost" data-start-chat="${escapeHtml(uid)}">Conversar</button>
     `;
   }
-  // grelha
+  // grelha — posts de foto apenas (posts de texto não têm imagem)
   const grid = $('#profile-grid');
-  if (!userPosts.length) {
+  const photoPosts = userPosts.filter((p) => p.imageUrl);
+  if (!photoPosts.length && !userPosts.length) {
     grid.innerHTML = '<div class="empty">Sem publicações ainda.</div>';
+  } else if (!photoPosts.length) {
+    grid.innerHTML = '<div class="empty">Só publicações de texto (sem fotos).</div>';
   } else {
-    grid.innerHTML = userPosts.map((p) => `<button><img src="${escapeHtml(p.imageUrl)}" alt="publicação" loading="lazy" crossorigin="anonymous" /></button>`).join('');
+    grid.innerHTML = photoPosts.map((p) => `<button><img src="${escapeHtml(p.imageUrl)}" alt="publicação" loading="lazy" crossorigin="anonymous" /></button>`).join('');
+  }
+  // conquistas do utilizador visitado (só na vista de perfil do próprio)
+  const achBox = $('#achievements-list');
+  if (achBox) {
+    if (isMe) {
+      achBox.style.display = '';
+      renderAchievements();
+    } else {
+      achBox.style.display = 'none';
+      achBox.innerHTML = '';
+    }
   }
   navigate('profile');
 }
@@ -623,6 +766,10 @@ async function toggleFollow(targetUid, btn) {
     btn.textContent = isFollowing ? 'A seguir ✓' : 'Seguir';
     btn.className = 'btn small' + (isFollowing ? ' ghost' : '');
     toast(isFollowing ? 'A seguir!' : 'Deixaste de seguir');
+    if (nowFollowing) {
+      xpOnFollow();
+      if (state.myFollowing.length >= 5) unlockAchievement('social_butterfly');
+    }
   } catch (e) { toast('Não foi possível seguir'); }
 }
 
@@ -754,5 +901,238 @@ $('#chat-input-form').addEventListener('submit', async (e) => {
   input.value = '';
   try {
     await dbSendMessage(state.currentChatId, state.me.uid, text);
+    xpOnChat();
   } catch (err) { toast('Falha ao enviar'); }
 });
+
+/* ---------- Novo estado (post de texto + mood) ---------- */
+let pickedMood = null;
+$('#new-text-btn').addEventListener('click', () => {
+  pickedMood = null;
+  $('#text-post-input').value = '';
+  const picker = $('#mood-picker');
+  picker.innerHTML = MOODS.map((m) => `<button type="button" class="mood-btn" data-mood="${m}">${m}</button>`).join('');
+  picker.querySelectorAll('.mood-btn').forEach((b) => b.addEventListener('click', () => {
+    picker.querySelectorAll('.mood-btn').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    pickedMood = b.dataset.mood;
+  }));
+  $('#new-text-modal').style.display = 'grid';
+});
+$('#cancel-text').addEventListener('click', () => { $('#new-text-modal').style.display = 'none'; });
+$('#publish-text').addEventListener('click', async () => {
+  const text = $('#text-post-input').value.trim();
+  if (!text) { toast('Escreve algo primeiro'); return; }
+  const btn = $('#publish-text');
+  btn.disabled = true;
+  try {
+    await dbCreateTextPost(state.me.uid, text, pickedMood);
+    $('#new-text-modal').style.display = 'none';
+    toast('Estado publicado!');
+    xpOnPost();
+    unlockAchievement('first_post');
+  } catch (e) { toast('Falha ao publicar: ' + (e.message || '')); }
+  finally { btn.disabled = false; }
+});
+
+/* ---------- Sondagens ---------- */
+let pollsUnsub = null;
+let pollVotesUnsubs = [];
+renderPolls._token = 0;
+function renderPolls() {
+  if (pollsUnsub) { try { pollsUnsub(); } catch (e) {} }
+  for (const u of pollVotesUnsubs) { try { u(); } catch (e) {} }
+  pollVotesUnsubs = [];
+  pollsUnsub = dbWatchPolls(async (snap) => {
+    const box = $('#polls-list');
+    if (!box) return;
+    // invalida renders anteriores (snapshot novo substitui lista antiga)
+    const myToken = ++renderPolls._token;
+    const polls = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const uids = new Set(polls.map((p) => p.uid));
+    await Promise.all(Array.from(uids).map((u) => loadUser(u)));
+    if (myToken !== renderPolls._token) return; // snapshot ultrapassado
+    if (!polls.length) {
+      // limpa watchers de votos antigos
+      for (const u of pollVotesUnsubs) { try { u(); } catch (e) {} }
+      pollVotesUnsubs = [];
+      box.innerHTML = '<div class="empty">Sem sondagens ainda. Cria a primeira!</div>';
+      return;
+    }
+    const votesByPoll = {};
+    const render = () => {
+      if (myToken !== renderPolls._token) return;
+      box.innerHTML = polls.map((p) => {
+        const u = state.usersCache[p.uid] || { username: '?' };
+        const votes = votesByPoll[p.id] || {};
+        const counts = (p.options || []).map((_, i) => Object.values(votes).filter((v) => v === i).length);
+        const total = counts.reduce((a, b) => a + b, 0);
+        const myVote = votes[state.me.uid];
+        return `<div class="poll-card">
+          <div class="meta">${avatarOf(u)} <b>@${escapeHtml(u.username || '?')}</b> <span style="color:var(--color-text-faint);font-size:var(--text-xs)">${timeAgo(p.createdAt)}</span></div>
+          <div class="poll-question">${escapeHtml(p.question || '')}</div>
+          ${(p.options || []).map((o, i) => {
+            const pct = total ? Math.round(counts[i] / total * 100) : 0;
+            return `<button class="poll-option ${myVote === i ? 'voted' : ''}" data-vote-poll="${escapeHtml(p.id)}" data-vote-poll-idx="${i}">
+              <span>${escapeHtml(o.text)} ${myVote === i ? '✓' : ''}</span>
+              <span class="bar" style="width:${Math.max(8, pct)}%"></span>
+              <span>${pct}%</span>
+            </button>`;
+          }).join('')}
+        </div>`;
+      }).join('');
+    };
+    render();
+    // cancela watchers de votos da lista anterior antes de reconstruir
+    for (const u of pollVotesUnsubs) { try { u(); } catch (e) {} }
+    pollVotesUnsubs = [];
+    for (const p of polls) {
+      const unsub = dbWatchPollVotes(p.id, (votes) => {
+        if (myToken !== renderPolls._token) return;
+        votesByPoll[p.id] = votes;
+        render();
+      });
+      pollVotesUnsubs.push(unsub);
+    }
+  });
+}
+async function votePoll(pollId, idx) {
+  if (!pollId || isNaN(idx) || idx < 0) return;
+  try {
+    await dbVotePoll(pollId, idx, state.me.uid);
+    toast('Voto registado!');
+  } catch (e) { toast('Falha ao votar: ' + (e.message || '')); }
+}
+$('#new-poll-btn').addEventListener('click', () => {
+  $('#poll-question').value = '';
+  $('#poll-opt-1').value = '';
+  $('#poll-opt-2').value = '';
+  $('#poll-opt-3').value = '';
+  $('#new-poll-modal').style.display = 'grid';
+});
+$('#cancel-poll').addEventListener('click', () => { $('#new-poll-modal').style.display = 'none'; });
+$('#publish-poll').addEventListener('click', async () => {
+  const q = $('#poll-question').value.trim();
+  const o1 = $('#poll-opt-1').value.trim();
+  const o2 = $('#poll-opt-2').value.trim();
+  const o3 = $('#poll-opt-3').value.trim();
+  if (!q || !o1 || !o2) { toast('Preenche a pergunta e pelo menos duas opções'); return; }
+  const opts = [o1, o2];
+  if (o3) opts.push(o3);
+  try {
+    await dbCreatePoll(state.me.uid, q, opts);
+    $('#new-poll-modal').style.display = 'none';
+    toast('Sondagem criada!');
+  } catch (e) { toast('Falha ao criar: ' + (e.message || '')); }
+});
+
+/* ---------- Música ---------- */
+function renderMusicView() {
+  dbWatchSongs(async (snap) => {
+    const box = $('#music-list');
+    if (!box) return;
+    const songs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const uids = new Set(songs.map((s) => s.uid));
+    await Promise.all(Array.from(uids).map((u) => loadUser(u)));
+    if (!songs.length) box.innerHTML = '<div class="empty">Ninguém partilhou música ainda. Sê o primeiro!</div>';
+    else {
+      box.innerHTML = songs.map((s) => {
+        const u = state.usersCache[s.uid] || { username: '?' };
+        return `<div class="music-item">
+          <div class="meta">${avatarOf(u)} <b>@${escapeHtml(u.username || '?')}</b> <span style="color:var(--color-text-faint);font-size:var(--text-xs)">${timeAgo(s.createdAt)}</span></div>
+          <iframe src="https://www.youtube-nocookie.com/embed/${escapeHtml(s.videoId)}" title="${escapeHtml(s.title || '')}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+        </div>`;
+      }).join('');
+    }
+  });
+  // sugestões
+  const sg = $('#music-suggestions-grid');
+  if (sg && !sg.innerHTML.trim()) {
+    sg.innerHTML = MUSIC_SUGGESTIONS.map((s) => `<button class="music-suggestion-card" data-play-suggestion="${escapeHtml(s.id)}">🎵 ${escapeHtml(s.title)}</button>`).join('');
+    sg.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-play-suggestion]');
+      if (b) {
+        const id = b.dataset.playSuggestion;
+        const box = $('#music-list');
+        box.insertAdjacentHTML('afterbegin', `<div class="music-item"><iframe src="https://www.youtube-nocookie.com/embed/${escapeHtml(id)}" allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>`);
+      }
+    });
+  }
+}
+$('#share-song-btn').addEventListener('click', () => {
+  $('#song-url').value = '';
+  $('#song-title').value = '';
+  $('#share-song-modal').style.display = 'grid';
+});
+$('#cancel-song').addEventListener('click', () => { $('#share-song-modal').style.display = 'none'; });
+$('#publish-song').addEventListener('click', async () => {
+  const url = $('#song-url').value.trim();
+  const title = $('#song-title').value.trim();
+  const m = url.match(/[?&]v=([\w-]{6,})/) || url.match(/youtu\.be\/([\w-]{6,})/);
+  if (!m) { toast('Link do YouTube inválido'); return; }
+  try {
+    await dbShareSong(state.me.uid, m[1], title);
+    $('#share-song-modal').style.display = 'none';
+    toast('Música partilhada!');
+  } catch (e) { toast('Falha ao partilhar: ' + (e.message || '')); }
+});
+
+/* ---------- Definições ---------- */
+function renderSettings() {
+  const status = $('#cloudinary-status');
+  if (status) {
+    status.innerHTML = cloudinaryConfigured()
+      ? '✅ Cloudinary configurado — uploads de imagens funcionais.'
+      : '⚠️ Cloudinary <b>não configurado</b>. Os uploads de imagens estão desativados até editares o ficheiro <code>public/config.js</code>. Passos: 1) cria conta em <a href="https://cloudinary.com" target="_blank">cloudinary.com</a> (grátis, sem cartão); 2) copia o Cloud Name do Dashboard; 3) Settings → Upload → Add upload preset → Unsigned → copia o nome; 4) cola os dois valores em <code>public/config.js</code>.';
+  }
+  if ($('#settings-email')) $('#settings-email').textContent = state.me.email || '—';
+  if ($('#settings-level')) $('#settings-level').textContent = state.player.level || 1;
+  if ($('#settings-xp')) $('#settings-xp').textContent = state.player.xp || 0;
+}
+$('#reset-password-settings').addEventListener('click', async () => {
+  const email = state.me.email;
+  if (!email) { toast('Sem email associado à conta'); return; }
+  const r = await fbResetPassword(email);
+  toast(r.ok ? 'Email de recuperação enviado' : (r.error || 'Falha'));
+});
+// guardar a escolha do som (Web Audio API — beep sintetizado, sem ficheiros)
+let soundsOn = true;
+let audioCtx = null;
+function playBeep(freq, ms) {
+  if (!soundsOn) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = freq || 880;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (ms || 120) / 1000);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + (ms || 120) / 1000);
+  } catch (e) { /* áudio indisponível — silencioso */ }
+}
+$('#sound-toggle').addEventListener('change', (e) => {
+  soundsOn = e.target.checked;
+  try { localStorage.setItem('picalta_sounds', soundsOn ? '1' : '0'); } catch (err) {}
+  if (soundsOn) playBeep(880, 120);
+});
+try { soundsOn = localStorage.getItem('picalta_sounds') !== '0'; $('#sound-toggle').checked = soundsOn; } catch (e) {}
+
+/* ---------- XP hooks nas ações existentes ---------- */
+(function hookXpOnActions() {
+  // gosto recebido: quando o número de likes de um post meu aumenta
+  let lastLikesByPost = {};
+  setInterval(() => {
+    for (const p of state.posts) {
+      const before = lastLikesByPost[p.id];
+      if (before !== undefined && (p.likes || []).length > before) {
+        if (p.uid === state.me.uid) addXp(XP_RULES.like_received, 'gosto recebido');
+      }
+      lastLikesByPost[p.id] = (p.likes || []).length;
+    }
+  }, 3000);
+})();

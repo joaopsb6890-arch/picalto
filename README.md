@@ -1,64 +1,81 @@
-# Picalta — versão Firebase
+# Picalta — versão Firebase + Cloudinary
 
-Rede social de fotos com conversas em tempo real, agora com **Firebase** (Authentication + Firestore + Storage) como backend. O frontend continua em HTML, CSS e JavaScript puro — sem build tools, sem frameworks.
+Rede social de fotos com conversas em tempo real, agora com **Firebase** (Authentication + Firestore) e **Cloudinary** para imagens (grátis, sem cartão). O frontend continua em HTML, CSS e JavaScript puro — sem build tools, sem frameworks.
 
-## O que tem de novo
+## O que tem de novo nesta versão
 
-- **Autenticação real** com Firebase Auth (email + palavra-passe), com ecrãs separados Entrar / Criar conta
-- **Feed em tempo real** via Firestore `onSnapshot` — publicações novas aparecem sem recarregar
-- **Conversas em tempo real** com escuta Firestore (substitui o WebSocket)
-- **Imagens no Firebase Storage** (URLs de download guardados no Firestore)
-- **Feed "A seguir"** — só publicações de quem segues
-- **Pesquisa de pessoas** por nome de utilizador
-- **Histórias (24h)** com visualizador e expiração automática no cliente
-- **Editar perfil** (nome, bio, foto de perfil no Storage)
-- **Apagar publicação** própria
-- **Notificações in-app** quando alguém começa a seguir-te
-- **Comentários** em tempo real por publicação
+### 🔐 Autenticação
+- **Login com Google** — botão "Entrar com Google" no ecrã de entrada
+- Email/palavra-passe (como antes)
+- **Recuperação de palavra-passe** ("Esqueceste-te da palavra-passe?")
+- Sessão persistente (localStorage) com fallback para memória em iframes sandboxed
 
-## ⚠️ Antes de funcionar: ativa os serviços no console
+### 🗄️ Armazenamento de imagens sem cartão de crédito
+- **Cloudinary** (grátis, sem cartão, 25 créditos/mês — ver [preços Cloudinary](https://cloudinary.com/pricing))
+- Substitui o Firebase Storage (que desde 2026 exige o plano Blaze com cartão)
+- Upload unsigned (client-side, sem servidor)
+- **Configuração necessária** — ver secção abaixo
 
-O teu projeto Firebase (`picala-a212f`) ainda não tem os serviços ativados. Sem isto a app não conecta. Faz estes passos:
+### 🎮 Jogos (6)
+1. **Jogo da Memória** — encontra pares de emojis
+2. **Snake** — a cobra clássica
+3. **Picalta Fly** — flappy bird
+4. **2048** — combina números até 2048
+5. **Galo** — tic-tac-toe contra o computador
+6. **Teste de Escrita** — 60 segundos, mede palavras/min e precisão
 
-### 1. Ativa Authentication (Email/Password)
-1. Abre [console.firebase.google.com](https://console.firebase.google.com), entra no projeto `picala-a212f`
-2. Menu esquerdo → **Build** → **Authentication** → **Get started**
+Cada jogo tem leaderboard próprio (top 20) guardado no Firestore.
+
+### 🏆 Progressão
+- **XP** por ação (publicar, gostar, comentar, seguir, jogar)
+- **Níveis** (1 a 13) com barra de progresso no feed
+- **Conquistas** (badges) — 13 desbloqueáveis
+- **Ranking global** por XP
+
+### 📱 Mais sistemas sociais
+- **Posts de texto** ("Novo estado") com mood picker (emoji)
+- **Hashtags** — clica numa hashtag para filtrar o feed
+- **Favoritos** — marca posts com um coração/estrela
+- **Sondagens** — cria perguntas com 2-3 opções, vota, vê percentagens
+- **Música** — partilha links do YouTube, toca direto na app
+- **Definições** — vê estado do Cloudinary, som on/off, reposição de password
+
+## ⚠️ Antes de funcionar: ativa os serviços
+
+### 1. Firebase: Authentication (Email/Password + Google)
+1. [console.firebase.google.com](https://console.firebase.google.com) → projeto `picala-a212f`
+2. **Build → Authentication → Get started**
 3. Tab **Sign-in method** → ativa **Email/Password** → Save
+4. Ativa também **Google** → Save
+5. (Opcional) Se usares domínio próprio: **Settings → Authorized domains**
 
-### 2. Cria a base de dados Firestore
-1. **Build** → **Firestore Database** → **Create database**
-2. Escolhe **Start in production mode** (as regras já estão neste projeto)
-3. Localização: `eur3` (Europa) ou o mais próximo
+### 2. Firebase: Firestore
+1. **Build → Firestore Database → Create database**
+2. **Start in production mode** (as regras já estão no projeto)
+3. Localização: `eur3` (Europa)
 
-### 3. Publica as regras de segurança do Firestore
-1. Na mesma página Firestore, tab **Rules**
-2. Apaga o conteúdo e cola o ficheiro `firestore.rules` deste projeto
-3. Clica **Publish**
+### 3. Publique as regras do Firestore
+1. Tab **Rules** → cola o conteúdo de `firestore.rules`
+2. **Publish**
+3. Tab **Indexes** → cria os índices compostos de `firestore.indexes.json` (ou usa `firebase deploy --only firestore:indexes` com o `firebase.json` incluído)
 
-### 4. Ativa Storage (⚠️ requer plano Blaze)
+### 4. Cloudinary (armazenamento de imagens, grátis sem cartão)
+1. Cria conta gratuita em [cloudinary.com](https://cloudinary.com) — **sem cartão**
+2. No Dashboard, copia o **Cloud Name**
+3. **Settings → Upload → Add upload preset** → escolhe **Unsigned** → copia o nome do preset
+4. Edita o ficheiro `public/config.js`:
+   ```js
+   var CLOUDINARY_CLOUD_NAME = 'o-teu-cloud-name';
+   var CLOUDINARY_UNSIGNED_PRESET = 'o-teu-preset';
+   ```
+5. Recarrega a app — os uploads de imagens passam a funcionar
 
-> **Importante:** desde 3 de fevereiro de 2026, o Cloud Storage para Firebase **exige o plano Blaze (pay-as-you-go)** — o plano gratuito Spark já não dá acesso a Storage. Para usar Storage tens de ligar uma conta de faturação do Google Cloud, mas o Blaze mantém as quotas gratuitas do Spark, pelo que uso leve (até ~5 GB armazenados) continua sem custo. Ver [requisitos de billing do Cloud Storage](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024).
+**Sobre o nome que te esqueceste:** era quase certamente **Cloudinary** (grátis, sem cartão, só para imagens/vídeo) ou **Supabase Storage** (1 GB grátis, também sem cartão). Escolhemos Cloudinary porque se integra só no frontend (não precisas de servidor) e é especialista em imagens. O plano Free dá 25 créditos/mês (1 crédito ≈ 1 GB de armazenamento OU 1 GB de banda OU 1000 transformações) — suficiente para uma rede social pequena.
 
-1. **Usage and billing** → faz upgrade do plano Spark para **Blaze** (requer cartão, mas uso leve mantém-se grátis)
-2. **Build** → **Storage** → **Get started**
-3. Tab **Rules** → cola o ficheiro `storage.rules` → **Publish**
-
-### 5. (Opcional) Regista o domínio para Auth
-Se a app for servida num domínio próprio, adiciona-o em **Authentication → Settings → Authorized domains**.
-
-## Como entrar na app
-
-1. Abre a app no browser
-2. No ecrã de entrada, carrega em **"Criar conta"** (não em "Entrar")
-3. Preenche **nome**, **email** e **palavra-passe** (mínimo 6 caracteres)
-4. Carrega em **"Criar conta"** — ficas autenticado e entras na app
-5. Para voltar mais tarde, carrega em **"Entrar"** e usa o mesmo email e palavra-passe
-
-> Nota: a autenticação usa persistência em memória, por isso após recarregares a página tens de voltar a entrar com email e palavra-passe.
+### 5. (Opcional) Firebase Storage — apenas se quiseres Blaze
+O Cloud Storage para Firebase **exige plano Blaze** desde fevereiro 2026. Se não quiseres ligar cartão, usa só Cloudinary e ignora o `storage.rules`.
 
 ## Como executar
-
-O frontend é estático (só HTML/CSS/JS), mas mantemos um servidor Node para desenvolvimento local:
 
 ```bash
 cd picalta-firebase
@@ -68,68 +85,82 @@ npm start        # ou: node server.js
 
 Abre http://localhost:8000.
 
+### Deploy opcional (Firebase Hosting)
+
+O projeto inclui `firebase.json` configurado. Se tiveres o CLI do Firebase:
+
+```bash
+npm install -g firebase-tools
+firebase login
+firebase deploy --only firestore:rules,firestore:indexes,hosting
+```
+
+Isto publica as regras, os índices compostos e o site estático de uma só vez.
+
 ## Estrutura
 
 ```
 picalta-firebase/
-├── server.js              # servidor estático (para dev local)
-├── firestore.rules        # regras de segurança Firestore (publicar no console)
-├── storage.rules          # regras de segurança Storage (publicar no console)
+├── server.js              # servidor estático (dev local)
+├── firestore.rules        # regras Firestore (posts, players, gameScores, polls, songs, favorites…)
+├── firestore.indexes.json # índices compostos (ranking por jogo, feed por hashtag/uid)
+├── firebase.json          # config CLI (rules + indexes + hosting)
+├── storage.rules          # (opcional, se usares Firebase Storage/Blaze)
 ├── public/
-│   ├── index.html         # interface completa
-│   ├── firebase.js        # init Firebase (SDK via CDN, persistência em memória)
+│   ├── index.html         # interface (views: feed, search, explore, chats, games, music, polls, settings, profile)
+│   ├── firebase.js        # init Firebase + login Google + reset password
 │   ├── auth.js            # login/signup + perfil Firestore
-│   ├── data.js            # operações Firestore + Storage (posts, chats, follow, stories)
-│   └── app.js             # lógica principal da UI
-├── package.json
+│   ├── data.js            # operações Firestore + Cloudinary (posts, chats, follow, stories, XP, jogos, polls, songs)
+│   ├── progress.js         # XP, níveis, conquistas
+│   ├── games.js            # 6 minijogos
+│   ├── app.js              # lógica principal da UI
+│   ├── config.example.js   # modelo para configurar o Cloudinary
+│   └── config.js           # Cloudinary credentials (edita tu)
 └── README.md
 ```
 
-## Como funciona
+## Sobre o armazenamento de imagens
 
-- **Auth**: Firebase Authentication com email/password, usando `initializeAuth` + `inMemoryPersistence` (funciona em iframes sandboxed sem IndexedDB)
-- **Dados**: Firestore com `onSnapshot` para tempo real (posts, comentários, mensagens de chat, stories, follows)
-- **Imagens**: Firebase Storage — upload com `uploadBytes`, URL de download com `getDownloadURL`, só a referência no Firestore
-- **Regras**: acesso baseado em `request.auth.uid` (identidade autenticada), não em IDs enviados pelo cliente; atualizações de publicações só alteram o campo `likes` (gostos)
-
-## Sobre as imagens (a tua pergunta)
-
-**Firebase Storage** é o certo para o teu caso — já tens o bucket na config (`picala-a212f.firebasestorage.app`). Alternativa seria guardar base64 dentro do documento Firestore, mas tem limite de ~1MB e cobrado por bytes armazenados no Firestore (mais caro). Com Storage:
-
-- cada foto vai para `posts/{uid}/{timestamp}.jpg`
-- o Firestore guarda só a URL de download (barato)
-- as regras limitam a 5MB e só imagens
-- o download URL é público (funciona em `<img crossorigin="anonymous">`)
-
-⚠️ Requer plano Blaze (ver secção "Antes de funcionar", passo 4).
+- **Cloudinary** substitui o Firebase Storage nos uploads
+- As URLs de imagens (antigas do Storage ou novas do Cloudinary) continuam a funcionar
+- O Firestore guarda só a URL de download (barato)
+- O upload é **unsigned** (sem API secret no frontend)
+- ⚠️ O preset unsigned é público — restringe formatos e tamanho no painel do Cloudinary
+- ⚠️ Apagar um documento no Firestore **não apaga** o ficheiro no Cloudinary (terias de o fazer manualmente no painel)
 
 ## Estado dos testes
 
-O que foi **implementado e testado localmente** (com um mock do Firebase que simula Auth, Firestore e Storage em memória — não contra o Firebase real):
+### O que foi efetivamente testado (executado neste histórico)
 
-- Fluxo completo de cadastro → feed → publicação de foto → gosto → comentário
-- Pesquisa de pessoas, seguir/deixar de seguir, perfil próprio e de outros
-- Conversa em tempo real entre duas contas (mensagens + hora)
-- História (24h) publicada e visualizada
-- Editar perfil, apagar publicação, notificações in-app
-- Acessos no telemóvel (nova história, notificações, tema, logout na tabbar)
-- Mensagem de erro clara quando o Firebase Auth não está ativado
+Testado em DOM real (jsdom, com os scripts carregados na ordem real do HTML e um mock de Firebase):
 
-O que **não foi possível testar** contra o Firebase real (o projeto `picala-a212f` não tem Auth/Firestore/Storage ativados):
+- **Arranque sem erros de sintaxe ou de consola** — todos os ficheiros (firebase, auth, data, progress, games, app) carregam e avaliam sem exceptions
+- **Navegação entre vistas** (feed → jogos → chats → música → sondagens → definições → perfil) sem erros
+- **Todos os 6 jogos criam os seus elementos DOM** (memory-grid, snake-canvas, flappy-canvas, grid2048, ttt-grid, typing-input)
+- **Cleanup de listeners** — sair da vista de jogos chama `closeGame()` que remove handlers de teclado (testado disparando keydown após close)
+- **`renderPolls`, `renderMusicView`, `renderSettings`** executam sem erros (com mock de Firestore vazio)
+- **`submitGameScore` + `addXp` + `unlockAchievement`** com mock de Firestore (runTransaction, addDoc) — XP atualiza de 0 → 20, conquista desbloqueada
+- **`dbCreatePoll`, `dbVotePoll`, `dbShareSong`, `dbCreateTextPost`, `dbToggleFavorite`** executam sem erros com mock
+- **`renderPolls` re-entrante** — segunda chamada limpa watchers antigos corretamente
+- **Regras de gostos validadas em 8 casos limite** (adicionar/remover próprio, adicionar/remover terceiro, duplicado, reordenar, neutro, substituir)
 
-- Uploads reais para Firebase Storage (funcionamento real do bucket)
-- Regras de segurança reais (as regras estão escritas mas não foram testadas contra o Firestore real)
-- Quotas e faturação
+### Não testado (depende de conta/credenciais reais)
 
-Assim que ativar os serviços no console (secção acima), a app deve funcionar imediatamente com a configuração já incluída em `public/firebase.js`.
+- **Login real com Google** — precisa de ativar o provider no console Firebase
+- **Uploads reais para Cloudinary** — precisa de cloud name + unsigned preset
+- **Regras de segurança contra o Firestore real** — as regras estão escritas e validadas em lógica, mas não foram avaliadas contra o servidor Firebase
+- **Quotas, limites e faturação**
 
-## Limitações
+### Limitações conhecidas (documentadas)
 
-- As histórias (stories) expiram no cliente após 24h — os ficheiros no Storage não são apagados automaticamente (precisaria de uma Cloud Function ou TTL policy)
-- Cloud Functions também requerem Blaze — expiração automática de stories ficaria para depois
-- O Analytics (`measurementId` na config) não está ativo por defeito; ativa-o só se quiseres analytics
-- Autenticação em memória: após recarregar a página tens de voltar a entrar
+- **Anti-batota básico**: o cliente calcula XP e pontuações. Um utilizador mal-intencionado pode escrever diretamente no Firestore para inflar XP/pontuações. As regras validam campos e tipos, mas o valor é controlado pelo cliente.
+- Stories expiram no cliente após 24h — ficheiros no Cloudinary não são apagados automaticamente (precisaria de Cloud Function ou tarefa agendada)
+- Cloudinary Free tem 25 créditos/mês partilhados entre armazenamento/banda/transformações — monitoriza no Dashboard
+- Analytics (`measurementId`) não ativo por defeito
+- 3 conquistas (first_follow, explorer, night_owl) agora têm gatilho implementado mas não foram testadas contra Firestore real
 
-## Alternativa sem cartão (se não quiseres Blaze)
+## Links úteis
 
-Se não quiseres ligar cartão de crédito, podes manter as imagens como **base64 no Firestore** (limite ~1MB por documento) ou usar um serviço gratuito de imagens (Cloudinary free tier). O código atual usa Storage; a mudança afetaria só `stUploadImage`/`stUploadAvatar` em `data.js`.
+- [Console Firebase](https://console.firebase.google.com)
+- [Cloudinary](https://cloudinary.com) — Dashboard e preços
+- [Regras do Firestore](https://firebase.google.com/docs/firestore/security/rules)
