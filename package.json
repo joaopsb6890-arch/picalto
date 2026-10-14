@@ -1,0 +1,12 @@
+{
+  "name": "picalta-firebase",
+  "version": "1.0.0",
+  "description": "Picalta - rede social de fotos com conversas (Firebase)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
